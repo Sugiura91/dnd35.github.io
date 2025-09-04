@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Fiche D&D 3.5 — modular</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Helvetica,Arial;padding:18px;background:#0b1220;color:#eaf6ff}
+    .panel{background:#071427;padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);margin-bottom:12px}
+    label{display:block;margin:6px 0;color:#9fb0c8}
+    .row{display:flex;gap:8px;align-items:center}
+    select,input{padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:#07111a;color:inherit}
+    button{margin-top:8px;padding:8px 10px;border-radius:8px;background:#5fd1ff;border:0;color:#002026;font-weight:700;cursor:pointer}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:6px;border:1px dashed rgba(255,255,255,0.03);font-size:13px}
+    .small{width:120px}
+    .classes-list{margin-top:8px}
+    .class-row{display:flex;gap:6px;align-items:center;margin-bottom:6px}
+    .muted{color:#90a9c1;font-size:13px}
+  </style>
+</head>
+<body>
+  <h1>Fiche D&D 3.5 — modular SRD</h1>
+
+  <div class="panel">
+    <label for="raceSelect">Race (applique traits)</label>
+    <select id="raceSelect"></select>
+    <div id="raceTraits" class="muted"></div>
+  </div>
+
+  <div class="panel">
+    <label>Multiclass — ajouter une classe</label>
+    <div class="row">
+      <select id="classPick"></select>
+      <input id="classLvl" type="number" min="1" max="20" value="1" class="small" />
+      <button id="addClass">Ajouter</button>
+    </div>
+
+    <div class="classes-list" id="classesList"></div>
+  </div>
+
+  <div class="panel">
+    <h3>Calculs</h3>
+    <div class="muted">Niveau total : <span id="totalLevel">0</span></div>
+    <div style="display:flex;gap:12px;margin-top:8px">
+      <div>BAB: <strong id="bab">0</strong></div>
+      <div>Fort: <strong id="saveFort">0</strong></div>
+      <div>Réf: <strong id="saveRef">0</strong></div>
+      <div>Vol: <strong id="saveWill">0</strong></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>Emplacements de sorts (fusion multiclasses exacte)</h3>
+    <div class="muted" id="spellFusionNote" style="margin-bottom:6px">La fusion suit la méthode SRD 3.5 : on convertit chaque classe en "caster levels" selon son type (full/partial/none), on additionne les caster levels (après ajustement), puis on détermine la table résultante d'emplacements par le tableau des lanceurs complets. Le système supporte les casters complets/partiels (Wizard/Cleric/Druid/Bard/Sorcerer full ou partial suivant SRD).</div>
+    <div id="spellsMerged"></div>
+    <div id="spellsPerClass" style="margin-top:12px"></div>
+  </div>
+
+<script type="module">
+  import { CLASSES } from './modules/classes/index.js';
+  import { RACES } from './modules/races/index.js';
+
+  // DOM
+  const raceSelect = document.getElementById('raceSelect');
+  const raceTraits = document.getElementById('raceTraits');
+  const classPick = document.getElementById('classPick');
+  const classLvl = document.getElementById('classLvl');
+  const addClassBtn = document.getElementById('addClass');
+  const classesList = document.getElementById('classesList');
+  const totalLevelEl = document.getElementById('totalLevel');
+  const babEl = document.getElementById('bab');
+  const fortEl = document.getElementById('saveFort');
+  const refEl = document.getElementById('saveRef');
+  const willEl = document.getElementById('saveWill');
+  const spellsMerged = document.getElementById('spellsMerged');
+  const spellsPerClass = document.getElementById('spellsPerClass');
+
+  // populate race & class selects
+  Object.keys(RACES).forEach(r => {
+    const o = document.createElement('option'); o.value = r; o.textContent = r;
+    raceSelect.appendChild(o);
+  });
+  Object.keys(CLASSES).forEach(c => {
+    const o = document.createElement('option'); o.value = c; o.textContent = c;
+    classPick.appendChild(o);
+  });
+
+  raceSelect.addEventListener('change', ()=>{
+    const r = RACES[raceSelect.value];
+    if(!r) { raceTraits.textContent = ''; return; }
+    const parts = [];
+    parts.push(`Taille: ${r.size}`);
+    if(r.speed != null) parts.push(`Vitesse: ${r.speed} m`);
+    if(r.vision) parts.push(`Vision: ${r.vision}`);
+    if(r.abilityMods && Object.keys(r.abilityMods).length) parts.push(`Mods: ${JSON.stringify(r.abilityMods)}`);
+    if(r.traits) parts.push('Traits: ' + r.traits.join('; '));
+    raceTraits.textContent = parts.join(' — ');
+  });
+  raceSelect.dispatchEvent(new Event('change'));
+
+  // classes storage
+  let classesAdded = []; // {name, level}
+
+  function renderClasses(){
+    classesList.innerHTML = '';
+    classesAdded.forEach((c, idx)=>{
+      const div = document.createElement('div');
+      div.className = 'class-row';
+      div.innerHTML = `<div style="flex:1">${c.name} (niv ${c.level})</div>
+                       <button data-idx="${idx}" class="edit">✎</button>
+                       <button data-idx="${idx}" class="del">✖</button>`;
+      classesList.appendChild(div);
+    });
+    classesList.querySelectorAll('button.edit').forEach(btn=>{
+      btn.addEventListener('click', e=>{
+        const i = Number(e.target.dataset.idx);
+        const newLvl = prompt('Nouveau niveau pour ' + classesAdded[i].name, classesAdded[i].level);
+        if(newLvl !== null){ classesAdded[i].level = Math.max(1, Math.min(20, Number(newLvl)||1)); updateAll(); }
+      });
+    });
+    classesList.querySelectorAll('button.del').forEach(btn=>{
+      btn.addEventListener('click', e=>{
+        const i = Number(e.target.dataset.idx);
+        classesAdded.splice(i,1); updateAll();
+      });
+    });
+  }
+
+  addClassBtn.addEventListener('click', ()=>{
+    const name = classPick.value;
+    const lvl = Math.max(1, Math.min(20, Number(classLvl.value)||1));
+    classesAdded.push({name, level: lvl});
+    renderClasses(); updateAll();
+  });
+
+  // helpers from modules
+  function babFactor(kind){
+    if(kind === 'full') return 1.0;
+    if(kind === 'avg') return 0.75;
+    return 0.5;
+  }
+  function intMod(score){ return Math.floor((Number(score||0)-10)/2); }
+
+  // SPELL CASTER MERGE: utility to compute combined caster level and resulting slots
+  // Approach:
+  // - Identify classes that contribute to caster level and whether they are full (1.0), 3/4, 1/2, or special (paladin/ranger partial)
+  // - For simplicity we use CLASSES[className].casterProgress (values: 1.0, 0.75, 0.5, 0.0)
+  // - CombinedCasterLevel = floor(sum(level * progress))
+  // - Then we use the "reference full-caster table" (Wizard) to map combinedCasterLevel -> slots
+  // Note: this matches SRD technique for multiclass casters (convert partials to fractional CL then sum),
+  // and then look up slots by treating the sum as a single caster level for a full caster.
+  function computeCombinedCasterLevel(){
+    let total = 0;
+    let contributing = [];
+    classesAdded.forEach(c=>{
+      const cls = CLASSES[c.name];
+      if(cls && typeof cls.casterProgress === 'number' && cls.casterProgress > 0){
+        total += c.level * cls.casterProgress;
+        contributing.push({name: c.name, level:c.level, prog: cls.casterProgress});
+      }
+    });
+    return {raw: total, floor: Math.floor(total), contributing};
+  }
+
+  function slotsForFullCasterLevel(level){
+    // use the wizard/cleric full caster table from modules if present
+    // CLASSES['Wizard'].spellTableFull is an array indexed by level 1..20 of arrays [slot1,slot2,...]
+    if(CLASSES['Wizard'] && CLASSES['Wizard'].spellTableFull && CLASSES['Wizard'].spellTableFull[level]){
+      return CLASSES['Wizard'].spellTableFull[level];
+    }
+    return [];
+  }
+
+  function renderSpells(){
+    // per class display
+    spellsPerClass.innerHTML = '';
+    classesAdded.forEach(c=>{
+      const cls = CLASSES[c.name];
+      const outer = document.createElement('div');
+      outer.style.marginBottom = '10px';
+      outer.innerHTML = `<strong>${c.name} (niv ${c.level})</strong>`;
+      if(cls && cls.spellcasting && cls.spellcasting.progression && cls.spellcasting.progression[c.level]){
+        const arr = cls.spellcasting.progression[c.level];
+        const tbl = document.createElement('table');
+        const thead = document.createElement('thead');
+        const trh = document.createElement('tr');
+        trh.innerHTML = arr.map((_,i)=>`<th>Sort niv ${i+1}</th>`).join('');
+        thead.appendChild(trh);
+        tbl.appendChild(thead);
+        const tr = document.createElement('tr');
+        tr.innerHTML = arr.map(n=>`<td>${n}</td>`).join('');
+        tbl.appendChild(tr);
+        outer.appendChild(tbl);
+      } else {
+        outer.innerHTML += `<div class="muted">Pas de progression de sorts (ou table non fournie)</div>`;
+      }
+      spellsPerClass.appendChild(outer);
+    });
+
+    // merged slots (combined caster level)
+    const comb = computeCombinedCasterLevel();
+    const notes = document.createElement('div');
+    notes.className = 'muted';
+    notes.textContent = `Contributing classes: ${comb.contributing.map(x=> x.name+'('+x.level+'@'+x.prog+')').join(', ') || 'aucune' } → CL total (raw)=${comb.raw.toFixed(2)} ; CL effective=${comb.floor}`;
+    spellsMerged.innerHTML = '';
+    spellsMerged.appendChild(notes);
+
+    if(comb.floor > 0){
+      const slots = slotsForFullCasterLevel(comb.floor);
+      if(slots && slots.length){
+        const t = document.createElement('table');
+        const th = document.createElement('thead'); th.innerHTML = '<tr>' + slots.map((_,i)=>`<th>Niv ${i+1}</th>`).join('') + '</tr>';
+        t.appendChild(th);
+        const tr = document.createElement('tr');
+        tr.innerHTML = slots.map(n=>`<td>${n}</td>`).join('');
+        t.appendChild(tr);
+        spellsMerged.appendChild(t);
+      } else {
+        const p = document.createElement('div'); p.className='muted'; p.textContent = 'Aucune table de sorts plein-caster disponible pour ce CL.';
+        spellsMerged.appendChild(p);
+      }
+    }
+  }
+
+  function updateAll(){
+    // totals
+    const totalLvl = classesAdded.reduce((s,c)=> s + (Number(c.level)||0), 0);
+    totalLevelEl.textContent = totalLvl;
+    // BAB sum from class bab factor if provided as babFactor*level or function CLASSES[name].bab(lvl)
+    let babSum = 0;
+    let fortBase = 0, refBase = 0, willBase = 0;
+    classesAdded.forEach(c=>{
+      const cfg = CLASSES[c.name];
+      if(!cfg) return;
+      // BAB
+      if(typeof cfg.bab === 'function') babSum += (cfg.bab(c.level) || 0);
+      else if(cfg.bab === 'full') babSum += c.level;
+      else if(cfg.bab === 'avg') babSum += Math.floor(c.level * 0.75);
+      else if(cfg.bab === 'poor') babSum += Math.floor(c.level * 0.5);
+
+      // saves: use cfg.saves(level) if function; else if cfg.savesGood etc.
+      if(typeof cfg.saves === 'function'){
+        const s = cfg.saves(c.level);
+        fortBase += s.fort || 0;
+        refBase += s.ref || 0;
+        willBase += s.will || 0;
+      } else if(cfg.saves){
+        // fallback
+        fortBase += (cfg.saves.fort ? (2 + Math.floor(c.level/2)) : Math.floor(c.level/3));
+        refBase += (cfg.saves.ref ? (2 + Math.floor(c.level/2)) : Math.floor(c.level/3));
+        willBase += (cfg.saves.will ? (2 + Math.floor(c.level/2)) : Math.floor(c.level/3));
+      }
+    });
+
+    babEl.textContent = Math.floor(babSum);
+    fortEl.textContent = fortBase;
+    refEl.textContent = refBase;
+    willEl.textContent = willBase;
+
+    renderSpells();
+  }
+
+  // init
+  renderClasses();
+  updateAll();
+
+  // expose update to other actions
+  window.__fiche_updateAll = updateAll;
+
+</script>
+</body>
+</html>
